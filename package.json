@@ -1,0 +1,24 @@
+{
+  "name": "spy-game",
+  "version": "1.0.0",
+  "description": "多人在线谁是卧底游戏",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "keywords": ["spy", "game", "socket.io", "multiplayer"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2",
+    "sql.js": "^1.9.0",
+    "bcryptjs": "^2.4.3",
+    "express-session": "^1.17.3",
+    "connect-sqlite3": "^0.9.15"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}

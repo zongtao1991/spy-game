@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>房间 - 谁是卧底</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .card {
+            border: none;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        .player-card {
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+        .player-card.ready {
+            border-color: #198754;
+            background-color: rgba(25, 135, 84, 0.1);
+        }
+        .player-card.host {
+            border-color: #ffc107;
+            background-color: rgba(255, 193, 7, 0.1);
+        }
+        .avatar {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: white;
+            margin: 0 auto;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        .status-badge {
+            font-size: 0.75rem;
+        }
+        .room-info {
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+            padding: 15px;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-transparent">
+        <div class="container">
+            <a class="navbar-brand text-white fw-bold fs-3" href="/">🎭 谁是卧底</a>
+            <div class="collapse navbar-collapse">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <button class="nav-link btn btn-link text-white" id="btn-leave-room">
+                            🏠 返回大厅
+                        </button>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="room-info mb-4">
+            <div class="row align-items-center">
+                <div class="col-md-8">
+                    <h3 class="mb-1" id="room-name">加载中...</h3>
+                    <p class="mb-0 opacity-75">房间号: <span id="room-id">---</span></p>
+                </div>
+                <div class="col-md-4 text-end">
+                    <span class="badge bg-light text-dark status-badge p-2">
+                        <span id="player-count">0</span> / <span id="max-players">8</span> 人
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <div class="card p-4 mb-4">
+            <h4 class="mb-4">玩家列表</h4>
+            <div class="row" id="player-list">
+            </div>
+        </div>
+
+        <div class="card p-4">
+            <div class="row">
+                <div class="col-md-6 mb-3 mb-md-0">
+                    <button class="btn btn-success btn-lg w-100" id="btn-ready">
+                        ✅ 准备就绪
+                    </button>
+                </div>
+                <div class="col-md-6">
+                    <button class="btn btn-primary btn-lg w-100" id="btn-start-game" style="display:none;">
+                        🎮 开始游戏
+                    </button>
+                </div>
+            </div>
+            <div class="row mt-3">
+                <div class="col-12">
+                    <div class="alert alert-info" id="game-tips">
+                        <strong>游戏规则：</strong>4-8人游戏，1-2个卧底。每人描述自己的词语，投票找出卧底！
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="errorModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">提示</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="error-message">
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal" id="error-btn">确定</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let socket = null;
+        let currentUser = null;
+        let currentRoomId = null;
+        let isHost = false;
+        let isReady = false;
+        let roomData = null;
+
+        const pathParts = window.location.pathname.split('/');
+        const roomIdParam = pathParts[pathParts.length - 1];
+
+        async function init() {
+            try {
+                const response = await fetch('/api/user');
+                const data = await response.json();
+                
+                if (!data.success) {
+                    window.location.href = '/';
+                    return;
+                }
+                
+                currentUser = data.user;
+                socket = io();
+                
+                setupSocketEvents();
+                joinRoom();
+            } catch (error) {
+                window.location.href = '/';
+            }
+        }
+
+        function setupSocketEvents() {
+            socket.on('connect', () => {
+                console.log('已连接到服务器');
+            });
+
+            socket.on('disconnect', () => {
+                console.log('与服务器断开连接');
+                showError('与服务器断开连接，请刷新页面重试');
+            });
+
+            socket.on('joinedRoom', (data) => {
+                currentRoomId = data.roomId;
+                isHost = data.isHost;
+                updateStartButton();
+            });
+
+            socket.on('roomUpdate', (data) => {
+                roomData = data;
+                updateRoomDisplay(data);
+            });
+
+            socket.on('error', (data) => {
+                showError(data.message);
+            });
+        }
+
+        function joinRoom() {
+            const createRoomData = localStorage.getItem('createRoomData');
+            
+            if (roomIdParam === 'new' && createRoomData) {
+                const data = JSON.parse(createRoomData);
+                localStorage.removeItem('createRoomData');
+                socket.emit('joinRoom', {
+                    userId: currentUser.id,
+                    username: currentUser.username,
+                    roomName: data.roomName,
+                    maxPlayers: data.maxPlayers
+                });
+            } else {
+                socket.emit('joinRoom', {
+                    userId: currentUser.id,
+                    username: currentUser.username,
+                    roomId: roomIdParam
+                });
+            }
+        }
+
+        function updateRoomDisplay(data) {
+            document.getElementById('room-name').textContent = data.roomName;
+            document.getElementById('room-id').textContent = data.roomId;
+            document.getElementById('player-count').textContent = data.players.length;
+            document.getElementById('max-players').textContent = data.maxPlayers;
+
+            const playerList = document.getElementById('player-list');
+            let html = '';
+            
+            data.players.forEach(player => {
+                const isCurrentUser = player.userId === currentUser.id;
+                let cardClass = 'player-card';
+                let badges = '';
+
+                if (player.isHost) {
+                    cardClass += ' host';
+                    badges += '<span class="badge bg-warning text-dark me-1">👑 房主</span>';
+                }
+                if (player.isReady) {
+                    cardClass += ' ready';
+                    badges += '<span class="badge bg-success">✅ 已准备</span>';
+                }
+
+                html += `
+                    <div class="col-md-3 mb-3">
+                        <div class="card ${cardClass} p-3 text-center">
+                            <div class="avatar mb-2">${player.username.charAt(0)}</div>
+                            <h6 class="mb-1">${player.username}${isCurrentUser ? ' (我)' : ''}</h6>
+                            <div>${badges || '<span class="text-muted">等待中</span>'}</div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            for (let i = data.players.length; i < data.maxPlayers; i++) {
+                html += `
+                    <div class="col-md-3 mb-3">
+                        <div class="card p-3 text-center opacity-50">
+                            <div class="avatar mb-2" style="background: #ccc;">?</div>
+                            <h6 class="mb-1 text-muted">虚位以待</h6>
+                            <div><span class="text-muted">等待加入</span></div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            playerList.innerHTML = html;
+
+            const currentPlayer = data.players.find(p => p.userId === currentUser.id);
+            if (currentPlayer) {
+                isReady = currentPlayer.isReady;
+                isHost = currentPlayer.isHost;
+                updateReadyButton();
+                updateStartButton();
+            }
+        }
+
+        function updateReadyButton() {
+            const btn = document.getElementById('btn-ready');
+            if (isReady) {
+                btn.className = 'btn btn-outline-success btn-lg w-100';
+                btn.innerHTML = '❌ 取消准备';
+            } else {
+                btn.className = 'btn btn-success btn-lg w-100';
+                btn.innerHTML = '✅ 准备就绪';
+            }
+        }
+
+        function updateStartButton() {
+            const btn = document.getElementById('btn-start-game');
+            if (isHost && roomData) {
+                btn.style.display = 'block';
+                const alivePlayers = roomData.players.filter(p => p.isAlive);
+                const allReady = alivePlayers.length >= 4 && alivePlayers.every(p => p.isReady || p.isHost);
+                btn.disabled = !allReady;
+            } else {
+                btn.style.display = 'none';
+            }
+        }
+
+        function showError(message) {
+            document.getElementById('error-message').textContent = message;
+            const modal = new bootstrap.Modal(document.getElementById('errorModal'));
+            modal.show();
+        }
+
+        document.getElementById('btn-ready').addEventListener('click', () => {
+            if (currentRoomId) {
+                socket.emit('ready', {
+                    userId: currentUser.id,
+                    roomId: currentRoomId
+                });
+            }
+        });
+
+        document.getElementById('btn-start-game').addEventListener('click', () => {
+            if (currentRoomId) {
+                socket.emit('startGame', { roomId: currentRoomId });
+                window.location.href = `/game/${currentRoomId}`;
+            }
+        });
+
+        document.getElementById('btn-leave-room').addEventListener('click', () => {
+            if (currentRoomId && socket) {
+                socket.emit('leaveRoom', {
+                    userId: currentUser.id,
+                    roomId: currentRoomId
+                });
+            }
+            window.location.href = '/';
+        });
+
+        document.getElementById('error-btn').addEventListener('click', () => {
+            window.location.href = '/';
+        });
+
+        init();
+    </script>
+</body>
+</html>
